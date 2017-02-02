@@ -368,15 +368,18 @@ static const SSL_METHOD *get_method(int protocol, int type)
   }
   caml_leave_blocking_section();
 
-  if (method == NULL)
-    caml_raise_constant(*caml_named_value("ssl_exn_method_error"));
+  if (method == NULL) {
+    caml_root exn = caml_named_root("ssl_exn_method_error");
+    caml_raise_constant(caml_read_root(exn));
+  }
 
   return method;
 }
 
 CAMLprim value ocaml_ssl_create_context(value protocol, value type)
 {
-  value block;
+  CAMLparam2(protocol,type);
+  CAMLlocal1(block);
   SSL_CTX *ctx;
   const SSL_METHOD *method = get_method(Int_val(protocol), Int_val(type));
 
@@ -385,7 +388,8 @@ CAMLprim value ocaml_ssl_create_context(value protocol, value type)
   if (!ctx)
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_context_error"));
+    caml_root exn = caml_named_root("ssl_exn_context_error");
+    caml_raise_constant(caml_read_root(exn));
   }
   /* In non-blocking mode, accept a buffer with a different address on
      a write retry (since the GC may need to move it). In blocking
@@ -395,7 +399,7 @@ CAMLprim value ocaml_ssl_create_context(value protocol, value type)
 
   block = caml_alloc_custom(&ctx_ops, sizeof(SSL_CTX*), 0, 1);
   Ctx_val(block) = ctx;
-  return block;
+  CAMLreturn(block);
 }
 
 CAMLprim value ocaml_ssl_ctx_use_certificate(value context, value cert, value privkey)
@@ -409,17 +413,20 @@ CAMLprim value ocaml_ssl_ctx_use_certificate(value context, value cert, value pr
   if (SSL_CTX_use_certificate_chain_file(ctx, cert_name) <= 0)
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+    caml_root exn = caml_named_root("ssl_exn_certificate_error");
+    caml_raise_constant(caml_read_root(exn));
   }
   if (SSL_CTX_use_PrivateKey_file(ctx, privkey_name, SSL_FILETYPE_PEM) <= 0)
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_private_key_error"));
+    caml_root exn = caml_named_root("ssl_exn_private_key_error");
+    caml_raise_constant(caml_read_root(exn));
   }
   if (!SSL_CTX_check_private_key(ctx))
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_unmatching_keys"));
+    caml_root exn = caml_named_root("ssl_exn_unmatching_keys");
+    caml_raise_constant(caml_read_root(exn));
   }
   caml_leave_blocking_section();
 
@@ -528,7 +535,8 @@ CAMLprim value ocaml_ssl_ctx_set_client_CA_list_from_file(value context, value v
   else
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+    caml_root exn = caml_named_root("ssl_exn_certificate_error");
+    caml_raise_constant(caml_read_root(exn));
   }
   caml_leave_blocking_section();
 
@@ -537,33 +545,37 @@ CAMLprim value ocaml_ssl_ctx_set_client_CA_list_from_file(value context, value v
 
 static int pem_passwd_cb(char *buf, int size, int rwflag, void *userdata)
 {
-  value s;
+  CAMLparam0();
+  CAMLlocal2(s,callback);
   int len;
 
   caml_leave_blocking_section();
-  s = caml_callback(*((value*)userdata), Val_int(rwflag));
+  callback = caml_read_root((caml_root)userdata);
+  s = caml_callback(callback, Val_int(rwflag));
   len = caml_string_length(s);
   assert(len <= size);
   memcpy(buf, String_val(s), len);
   caml_enter_blocking_section();
 
-  return len;
+  CAMLreturnT(int,len);
 }
 
 CAMLprim value ocaml_ssl_ctx_set_default_passwd_cb(value context, value cb)
 {
   CAMLparam2(context, cb);
   SSL_CTX *ctx = Ctx_val(context);
-  value *pcb;
+  //value *pcb;
 
   /* TODO: this never gets freed or even unregistered */
-  pcb = malloc(sizeof(value));
-  *pcb = cb;
-  caml_register_global_root(pcb);
+  //pcb = malloc(sizeof(value));
+  //*pcb = cb;
+  //caml_register_global_root(pcb);
+  caml_root pcb = caml_create_root(cb);
 
   caml_enter_blocking_section();
   SSL_CTX_set_default_passwd_cb(ctx, pem_passwd_cb);
-  SSL_CTX_set_default_passwd_cb_userdata(ctx, pcb);
+  //SSL_CTX_set_default_passwd_cb_userdata(ctx, pcb);
+  SSL_CTX_set_default_passwd_cb_userdata(ctx, (void*)pcb);
   caml_leave_blocking_section();
 
   CAMLreturn(Val_unit);
@@ -587,15 +599,16 @@ CAMLprim value ocaml_ssl_ctx_set_cipher_list(value context, value ciphers_string
   CAMLparam2(context, ciphers_string);
   SSL_CTX *ctx = Ctx_val(context);
   char *ciphers = String_val(ciphers_string);
+  caml_root exn = caml_named_root("ssl_exn_cipher_error");
 
   if(*ciphers == 0)
-    caml_raise_constant(*caml_named_value("ssl_exn_cipher_error"));
+    caml_raise_constant(caml_read_root(exn));
 
   caml_enter_blocking_section();
   if(SSL_CTX_set_cipher_list(ctx, ciphers) != 1)
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_cipher_error"));
+    caml_raise_constant(caml_read_root(exn));
   }
   caml_leave_blocking_section();
 
@@ -620,48 +633,53 @@ CAMLprim value ocaml_ssl_get_current_cipher(value socket)
   SSL *ssl = SSL_val(socket);
 
   caml_enter_blocking_section();
-  SSL_CIPHER *cipher = (SSL_CIPHER*)SSL_get_current_cipher(ssl);
+    SSL_CIPHER *cipher = (SSL_CIPHER*)SSL_get_current_cipher(ssl);
   caml_leave_blocking_section();
-  if (!cipher)
-    caml_raise_constant(*caml_named_value("ssl_exn_cipher_error"));
+  if (!cipher) {
+    caml_root exn = caml_named_root("ssl_exn_cipher_error");
+    caml_raise_constant(caml_read_root(exn));
+  }
 
   CAMLreturn((value)cipher);
 }
 
 CAMLprim value ocaml_ssl_get_cipher_description(value vcipher)
 {
+  CAMLparam1(vcipher);
   char buf[1024];
   SSL_CIPHER *cipher = (SSL_CIPHER*)vcipher;
 
   caml_enter_blocking_section();
-  SSL_CIPHER_description(cipher, buf, 1024);
+    SSL_CIPHER_description(cipher, buf, 1024);
   caml_leave_blocking_section();
 
-  return caml_copy_string(buf);
+  CAMLreturn(caml_copy_string(buf));
 }
 
 CAMLprim value ocaml_ssl_get_cipher_name(value vcipher)
 {
+  CAMLparam1(vcipher);
   const char *name;
   SSL_CIPHER *cipher = (SSL_CIPHER*)vcipher;
 
   caml_enter_blocking_section();
-  name = SSL_CIPHER_get_name(cipher);
+    name = SSL_CIPHER_get_name(cipher);
   caml_leave_blocking_section();
 
-  return caml_copy_string(name);
+  CAMLreturn(caml_copy_string(name));
 }
 
 CAMLprim value ocaml_ssl_get_cipher_version(value vcipher)
 {
+  CAMLparam1(vcipher);
   const char *version;
   SSL_CIPHER *cipher = (SSL_CIPHER*)vcipher;
 
   caml_enter_blocking_section();
-  version = SSL_CIPHER_get_version(cipher);
+    version = SSL_CIPHER_get_version(cipher);
   caml_leave_blocking_section();
 
-  return caml_copy_string(version);
+  CAMLreturn(caml_copy_string(version));
 }
 
 CAMLprim value ocaml_ssl_ctx_init_dh_from_file(value context, value dh_file_path)
@@ -670,16 +688,17 @@ CAMLprim value ocaml_ssl_ctx_init_dh_from_file(value context, value dh_file_path
   DH *dh = NULL;
   SSL_CTX *ctx = Ctx_val(context);
   char *dh_cfile_path = String_val(dh_file_path);
+  caml_root exn = caml_named_root("ssl_exn_diffie_hellman_error");
 
   if(*dh_cfile_path == 0)
-    caml_raise_constant(*caml_named_value("ssl_exn_diffie_hellman_error"));
+    caml_raise_constant(caml_read_root(exn));
 
   dh = load_dh_param(dh_cfile_path);
   caml_enter_blocking_section();
   if (dh != NULL){
     if(SSL_CTX_set_tmp_dh(ctx,dh) != 1){
       caml_leave_blocking_section();
-      caml_raise_constant(*caml_named_value("ssl_exn_diffie_hellman_error"));
+      caml_raise_constant(caml_read_root(exn));
     }
     SSL_CTX_set_options(ctx, SSL_OP_SINGLE_DH_USE);
     caml_leave_blocking_section();
@@ -687,7 +706,7 @@ CAMLprim value ocaml_ssl_ctx_init_dh_from_file(value context, value dh_file_path
   }
   else{
       caml_leave_blocking_section();
-      caml_raise_constant(*caml_named_value("ssl_exn_diffie_hellman_error"));
+      caml_raise_constant(caml_read_root(exn));
   }
   CAMLreturn(Val_unit);
 }
@@ -700,13 +719,14 @@ CAMLprim value ocaml_ssl_ctx_init_ec_from_named_curve(value context, value curve
   int nid = 0;
   SSL_CTX *ctx = Ctx_val(context);
   char *ec_curve_name = String_val(curve_name);
+  caml_root exn = caml_named_root("ssl_exn_ec_curve_error");
 
   if(*ec_curve_name == 0)
-    caml_raise_constant(*caml_named_value("ssl_exn_ec_curve_error"));
+    caml_raise_constant(caml_read_root(exn));
 
   nid = OBJ_sn2nid(ec_curve_name);
   if(nid == 0){
-    caml_raise_constant(*caml_named_value("ssl_exn_ec_curve_error"));
+    caml_raise_constant(caml_read_root(exn));
   }
 
   caml_enter_blocking_section();
@@ -714,7 +734,7 @@ CAMLprim value ocaml_ssl_ctx_init_ec_from_named_curve(value context, value curve
   if(ecdh != NULL){
     if(SSL_CTX_set_tmp_ecdh(ctx,ecdh) != 1){
       caml_leave_blocking_section();
-      caml_raise_constant(*caml_named_value("ssl_exn_ec_curve_error"));
+      caml_raise_constant(caml_read_root(exn));
     }
     SSL_CTX_set_options(ctx, SSL_OP_SINGLE_ECDH_USE);
     caml_leave_blocking_section();
@@ -722,7 +742,7 @@ CAMLprim value ocaml_ssl_ctx_init_ec_from_named_curve(value context, value curve
   }
   else{
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_ec_curve_error"));
+    caml_raise_constant(caml_read_root(exn));
   }
   CAMLreturn(Val_unit);
 }
@@ -730,7 +750,8 @@ CAMLprim value ocaml_ssl_ctx_init_ec_from_named_curve(value context, value curve
 CAMLprim value ocaml_ssl_ctx_init_ec_from_named_curve(value context, value curve_name)
 {
     CAMLparam2(context, curve_name);
-    caml_raise_constant(*caml_named_value("ssl_exn_ec_curve_error"));
+    caml_root exn = caml_named_root("ssl_exn_ec_curve_error");
+    caml_raise_constant(caml_read_root(exn));
     CAMLreturn(Val_unit);
 }
 #endif
@@ -762,16 +783,17 @@ CAMLprim value ocaml_ssl_read_certificate(value vfilename)
   char *filename = String_val(vfilename);
   X509 *cert = NULL;
   FILE *fh = NULL;
+  caml_root exn = caml_named_root("ssl_exn_certificate_error");
 
   if((fh = fopen(filename, "r")) == NULL)
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+    caml_raise_constant(caml_read_root(exn));
 
   caml_enter_blocking_section();
   if((PEM_read_X509(fh, &cert, 0, 0)) == NULL)
   {
     fclose(fh);
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+    caml_raise_constant(caml_read_root(exn));
   }
   fclose(fh);
   caml_leave_blocking_section();
@@ -787,16 +809,17 @@ CAMLprim value ocaml_ssl_write_certificate(value vfilename, value certificate)
   char *filename = String_val(vfilename);
   X509 *cert = Cert_val(certificate);
   FILE *fh = NULL;
+  caml_root exn = caml_named_root("ssl_exn_certificate_error");
 
   if((fh = fopen(filename, "w")) == NULL)
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+    caml_raise_constant(caml_read_root(exn));
 
   caml_enter_blocking_section();
   if(PEM_write_X509(fh, cert) == 0)
   {
     fclose(fh);
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+    caml_raise_constant(caml_read_root(exn));
   }
   fclose(fh);
   caml_leave_blocking_section();
@@ -807,16 +830,19 @@ CAMLprim value ocaml_ssl_write_certificate(value vfilename, value certificate)
 CAMLprim value ocaml_ssl_get_certificate(value socket)
 {
   CAMLparam1(socket);
+  CAMLlocal1(block);
   SSL *ssl = SSL_val(socket);
 
   caml_enter_blocking_section();
   X509 *cert = SSL_get_peer_certificate(ssl);
   caml_leave_blocking_section();
 
-  if (!cert)
-    caml_raise_constant(*caml_named_value("ssl_exn_certificate_error"));
+  if (!cert) {
+    caml_root exn = caml_named_root("ssl_exn_certificate_error");
+    caml_raise_constant(caml_read_root(exn));
+  }
 
-  CAMLlocal1(block);
+  
   block = caml_alloc_final(2, finalize_cert, 0, 1);
   (*((X509 **) Data_custom_val(block))) = cert;
   CAMLreturn(block);
@@ -902,14 +928,17 @@ CAMLprim value ocaml_ssl_embed_socket(value socket_, value context)
 
   block = caml_alloc_custom(&socket_ops, sizeof(SSL*), 0, 1);
 
-  if (socket < 0)
-    caml_raise_constant(*caml_named_value("ssl_exn_invalid_socket"));
+  if (socket < 0) {
+    caml_root exn = caml_named_root("ssl_exn_invalid_socket");
+    caml_raise_constant(caml_read_root(exn));
+  }
   caml_enter_blocking_section();
   ssl = SSL_new(ctx);
   if (!ssl)
   {
     caml_leave_blocking_section();
-    caml_raise_constant(*caml_named_value("ssl_exn_handler_error"));
+    caml_root exn = caml_named_root("ssl_exn_handler_error");
+    caml_raise_constant(caml_read_root(exn));
   }
   SSL_set_fd(ssl, socket);
   caml_leave_blocking_section();
@@ -935,7 +964,8 @@ CAMLprim value ocaml_ssl_set_client_SNI_hostname(value socket, value vhostname)
 CAMLprim value ocaml_ssl_set_client_SNI_hostname(value socket, value vhostname)
 {
     CAMLparam2(socket, vhostname);
-    caml_raise_constant(*caml_named_value("ssl_exn_method_error"));
+    caml_root exn = caml_named_root("ssl_exn_method_error");
+    caml_raise_constant(caml_read_root(exn));
     CAMLreturn(Val_unit);
 }
 #endif
@@ -950,8 +980,10 @@ CAMLprim value ocaml_ssl_connect(value socket)
   ret = SSL_connect(ssl);
   err = SSL_get_error(ssl, ret);
   caml_leave_blocking_section();
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_connection_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_connection_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_unit);
 }
@@ -968,10 +1000,11 @@ CAMLprim value ocaml_ssl_verify(value socket)
 
   if (ans != 0)
   {
+    caml_root exn = caml_named_root("ssl_exn_verify_error");
     if (2 <= ans && ans <= 32)
-      caml_raise_with_arg(*caml_named_value("ssl_exn_verify_error"), Val_int(ans - 2)); /* Not very nice, but simple */
+      caml_raise_with_arg(caml_read_root(exn), Val_int(ans - 2)); /* Not very nice, but simple */
     else
-      caml_raise_with_arg(*caml_named_value("ssl_exn_verify_error"), Val_int(31));
+      caml_raise_with_arg(caml_read_root(exn), Val_int(31));
   }
 
   CAMLreturn(Val_unit);
@@ -996,8 +1029,10 @@ CAMLprim value ocaml_ssl_write(value socket, value buffer, value start, value le
   caml_leave_blocking_section();
   free(buf);
 
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_write_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_write_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_int(ret));
 }
@@ -1022,8 +1057,10 @@ CAMLprim value ocaml_ssl_write_bigarray(value socket, value buffer, value start,
   err = SSL_get_error(ssl, ret);
   caml_leave_blocking_section();
 
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_write_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_write_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_int(ret));
 }
@@ -1046,8 +1083,10 @@ CAMLprim value ocaml_ssl_write_bigarray_blocking(value socket, value buffer, val
   ret = SSL_write(ssl, buf, Int_val(length));
   err = SSL_get_error(ssl, ret);
 
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_write_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_write_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_int(ret));
 }
@@ -1071,8 +1110,10 @@ CAMLprim value ocaml_ssl_read(value socket, value buffer, value start, value len
   memmove(((char*)String_val(buffer)) + Int_val(start), buf, buflen);
   free(buf);
 
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_read_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_read_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_int(ret));
 }
@@ -1097,8 +1138,10 @@ CAMLprim value ocaml_ssl_read_into_bigarray(value socket, value buffer, value st
   err = SSL_get_error(ssl, ret);
   caml_leave_blocking_section();
 
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_read_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_read_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_int(ret));
 }
@@ -1121,8 +1164,10 @@ CAMLprim value ocaml_ssl_read_into_bigarray_blocking(value socket, value buffer,
   ret = SSL_read(ssl, buf, Int_val(length));
   err = SSL_get_error(ssl, ret);
 
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_read_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_read_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_int(ret));
 }
@@ -1138,8 +1183,10 @@ CAMLprim value ocaml_ssl_accept(value socket)
   ret = SSL_accept(ssl);
   err = SSL_get_error(ssl, ret);
   caml_leave_blocking_section();
-  if (err != SSL_ERROR_NONE)
-    caml_raise_with_arg(*caml_named_value("ssl_exn_accept_error"), Val_int(err));
+  if (err != SSL_ERROR_NONE) {
+    caml_root exn = caml_named_root("ssl_exn_accept_error");
+    caml_raise_with_arg(caml_read_root(exn), Val_int(err));
+  }
 
   CAMLreturn(Val_unit);
 }
